@@ -1,0 +1,28 @@
+# 1. Виртуальное окружение (самое важное)
+venv/
+
+# 2. Папка для защиты (как вы и просили)
+zashita/
+
+# 3. Тяжелые архивы и исходники
+archive.zip
+
+# 4. Служебный кэш Python и Jupyter
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# 5. Системные файлы (если работаете на Windows или Mac)
+.DS_Store
+Thumbs.db
+
+# 6. Локальные настройки VS Code (опционально)
+.vscode/
+
+# Игнорировать данные (CSV)
+data/raw/WA_Fn-UseC_-Telco-Customer-Churn.csv
+data/processed/cleaned_data.csv
+
+# Можно указать просто папки целиком, чтобы наверняка:
+data/raw/
+data/processed/
