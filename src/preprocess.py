@@ -1,5 +1,5 @@
-import pandas as pd
 import os
+import pandas as pd
 
 # 1. Загрузка данных
 raw_path = 'data/raw/WA_Fn-UseC_-Telco-Customer-Churn.csv'
