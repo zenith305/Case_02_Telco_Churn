@@ -1,10 +1,18 @@
 import os
-
 import pandas as pd
 
 # 1. Загрузка данных
 raw_path = 'data/raw/WA_Fn-UseC_-Telco-Customer-Churn.csv'
-df = pd.read_csv(raw_path)
+
+# Если файла нет (например, мы в GitHub Actions), скачиваем его!
+if not os.path.exists(raw_path):
+    print("Файл не найден. Скачиваем с GitHub IBM...")
+    url = "https://raw.githubusercontent.com/IBM/telco-customer-churn-on-icp4d/master/data/Telco-Customer-Churn.csv"
+    df = pd.read_csv(url)
+    os.makedirs('data/raw', exist_ok=True)
+    df.to_csv(raw_path, index=False)
+else:
+    df = pd.read_csv(raw_path)
 
 print("Исходный размер данных:", df.shape)
 
