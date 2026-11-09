@@ -36,3 +36,7 @@ models/*.pkl
 # Игнорировать файлы модели и сгенерированные CSV
 *.joblib
 high_risk_customers.csv
+
+# Архивы и бэкапы
+*.zip
+*.zip.zip
