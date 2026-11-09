@@ -57,4 +57,4 @@ Case_02_Telco_Churn/
 ├── .gitignore                # Исключения для Git
 ├── README.md                 # Описание проекта
 └── requirements.txt          # Зависимости
-` ``` `
+```
