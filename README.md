@@ -41,6 +41,8 @@
 5. Способ оплаты: Электронный чек — повышает вероятность ухода.
 
 📂 Структура проекта
+
+```text
 Case_02_Telco_Churn/
 ├── models/
 │   └── final_churn_model.pkl # Обученная модель (Pipeline)
@@ -55,3 +57,4 @@ Case_02_Telco_Churn/
 ├── .gitignore                # Исключения для Git
 ├── README.md                 # Описание проекта
 └── requirements.txt          # Зависимости
+` ``` `
