@@ -1,0 +1,29 @@
+[33mceddde2[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m docs: исправить форматирование блока кода в README
+[33m5c39790[m docs: fix project structure formatting in README
+[33ma374225[m docs: update README with final project structure and models
+[33mac87f57[m chore: ignore zip archives in git
+[33m9988cbb[m feat: completed churn prediction project with SHAP and final model
+[33m3853bc2[m Добавил график по стажу и обновил текст
+[33md3ecbdf[m refactor: replace ydata-profiling with custom overview, fix plotly and model saving
+[33mbde6136[m Update notebooks and report after Python 3.12 migration
+[33m4d105ab[m Auto-fix imports with Ruff
+[33m3cf637a[m Add pytest CI integration and pip caching
+[33mbbc8be8[m Update .gitignore, requirements and notebook
+[33mb2bacdf[m Update 02_features notebook after switching to Python 3.12 environment
+[33m25c2a0f[m Исправлен requirements.txt: pywinpty только для Windows
+[33m060e993[m Project for colab
+[33me39c507[m Update requirements for Python 3.12 compatibility
+[33m94d287b[m Кеширование в CI для ускорения
+[33m60b96e0[m Auto-fix imports with Ruff
+[33md5414ef[m Fix formatting for CI final
+[33m6465402[m Fix formatting for CI
+[33mc33f22c[m Fix import order for CI
+[33md18638f[m Add CI workflow for Python linting
+[33m0ec36eb[m Добавлены бизнес-инсайты: графики оттока и список клиентов в зоне риска
+[33mc349ab2[m[33m ([m[1;31morigin/experiment_fisher[m[33m, [m[1;32mexperiment_fisher[m[33m)[m Add Fisher Scoring experiment (ROC-AUC 0.8393)
+[33ma0adace[m Experiment with fisher-scoring (failed due to Python 3.14 incompatibility).
+[33m6417840[m Убраны CSV-файлы из Git, обновлен .gitignore
+[33m91cd557[m Initial commit: data pipeline and model
+[33m4c95486[m[33m ([m[1;33mtag: [m[1;33mv1.0.0[m[33m)[m add release workflow
+[33m70f0014[m add first ci workflow
+[33m81a6de1[m Initial commit
