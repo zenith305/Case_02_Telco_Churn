@@ -1,42 +1,49 @@
-# 1. Виртуальное окружение (самое важное)
-venv/
 
-# 2. Папка для защиты (как вы и просили)
+# ==========================================
+# Case_02_Telco_Churn
+# ==========================================
+
+# 1. Виртуальные окружения
+venv/
+.venv/
+env/
+
+# 2. Папка с материалами защиты
 zashita/
 
-# 3. Тяжелые архивы и исходники
-archive.zip
-
-# 4. Служебный кэш Python и Jupyter
+# 3. Кэш Python и Jupyter
 __pycache__/
 *.py[cod]
+.pytest_cache/
 .ipynb_checkpoints/
 
-# 5. Системные файлы (если работаете на Windows или Mac)
+# 4. Системные файлы
 .DS_Store
 Thumbs.db
 
-# 6. Локальные настройки VS Code (опционально)
+# 5. Локальные настройки редакторов
 .vscode/
+.idea/
 
-# Игнорировать данные (CSV)
-data/raw/WA_Fn-UseC_-Telco-Customer-Churn.csv
-data/processed/cleaned_data.csv
+# 6. Секреты и локальные переменные
+.env
+.env.*
+!.env.example
 
-# Можно указать просто папки целиком, чтобы наверняка:
-data/raw/
-data/processed/
+# 7. Архивы и резервные копии
+*.zip
+*.bak
 
-# Убираю от загрузки архив защита
-Zashita_Archive.zip
-
-# Убираю обученный файл .pkl
+# 8. Обученные модели
 models/*.pkl
-
-# Игнорировать файлы модели и сгенерированные CSV
 *.joblib
+
+# 9. Сгенерированные результаты
 high_risk_customers.csv
 
-# Архивы и бэкапы
-*.zip
-*.zip.zip
+# 10. Обработанные данные не публикуем
+data/processed/
+
+# 11. В папке raw публикуем только исходный датасет
+data/raw/*
+!data/raw/WA_Fn-UseC_-Telco-Customer-Churn.csv

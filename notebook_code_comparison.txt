@@ -1,0 +1,761 @@
+СРАВНЕНИЕ КОДА НОУТБУКОВ
+======================================================================
+A: TEAM11_02_zashita_FINAL_with_names.ipynb
+B: 02_zashita_optimized.ipynb
+
+======================================================================
+REPLACE: A[1:7], B[1:9]
+
+--- A: кодовая ячейка 1 ---
+import os
+from pathlib import Path
+from threadpoolctl import threadpool_limits
+import sys
+import warnings
+
+import joblib
+import matplotlib.pyplot as plt
+import numpy as np
+import optuna
+import pandas as pd
+import seaborn as sns
+import shap
+from scipy.stats import loguniform, randint
+from sklearn.compose import ColumnTransformer
+from sklearn.dummy import DummyClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.inspection import permutation_importance
+from sklearn.linear_model import LogisticRegression
+from sklearn.exceptions import ConvergenceWarning
+from sklearn.metrics import (
+    ConfusionMatrixDisplay,
+    classification_report,
+    precision_recall_curve,
+    roc_auc_score,
+    roc_curve,
+)
+from sklearn.model_selection import (
+    GridSearchCV,
+    RandomizedSearchCV,
+    StratifiedKFold,
+    cross_val_predict,
+    cross_val_score,
+    cross_validate,
+    train_test_split,
+)
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import MinMaxScaler, OneHotEncoder, RobustScaler, StandardScaler
+
+# Ищем корень проекта независимо от текущей рабочей папки.
+PROJECT_ROOT = next((q for base in [Path.cwd(), *Path.cwd().parents]
+                     for q in [base, base.parent]
+                     if (q / "src" / "data_utils.py").exists()), None)
+if PROJECT_ROOT is None:
+    raise FileNotFoundError("Не найден src/data_utils.py. Запускайте ноутбук из папки проекта или notebooks/.")
+sys.path.insert(0, str(PROJECT_ROOT))
+from src.data_utils import load_and_clean
+
+warnings.filterwarnings("ignore", category=FutureWarning)
+optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+RANDOM_STATE = 42
+# Для первого запуска True: быстрый тест; для итоговых результатов False.
+FAST_MODE = False
+CV_FOLDS = 3 if FAST_MODE else 5
+SEARCH_ITER = 8 if FAST_MODE else 40
+OPTUNA_TRIALS = 8 if FAST_MODE else 50
+N_JOBS = 2  # избегаем перегрузки памяти при вложенной параллелизации
+MIN_RECALL = 0.75
+CV = StratifiedKFold(n_splits=CV_FOLDS, shuffle=True, random_state=RANDOM_STATE)
+sns.set_theme(style="whitegrid")
+PALETTE = {"Остался": "#4c9f70", "Ушёл": "#e4572e"}
+CLASS_LABELS = {0: "Остался", 1: "Ушёл"}
+
+
+--- A: кодовая ячейка 2 ---
+df = load_and_clean()
+print(f"Размер данных: {df.shape}")
+print(f"Доля ушедших: {df['Отток'].mean():.1%}")
+print(f"Пропусков всего: {df.isna().sum().sum()}")
+print(f"Дубликатов по признакам (без customerID): "
+      f"{df.drop(columns=['customerID'], errors='ignore').duplicated().sum()}")
+display(df.head(3))
+# Фиксируем hold-out ДО любого исследовательского анализа.
+raw_X = df.drop(columns=["Отток"])
+raw_y = df["Отток"]
+X_train_raw, X_test_raw, y_train, y_test = train_test_split(
+    raw_X, raw_y, test_size=0.2, stratify=raw_y, random_state=RANDOM_STATE
+)
+df_eda_raw = X_train_raw.copy()
+df_eda_raw["Отток"] = y_train
+print(f"Обучающая выборка: {len(df_eda_raw)}; независимый test: {len(X_test_raw)}")
+
+
+--- A: кодовая ячейка 3 ---
+num_cols_all = [c for c in df.select_dtypes("number").columns if c != "Отток"]
+
+display(df_eda_raw[num_cols_all].describe().loc[["min", "25%", "50%", "75%", "max"]].T)
+
+fig, axes = plt.subplots(1, len(num_cols_all), figsize=(4 * len(num_cols_all), 3.5), squeeze=False)
+for ax, col in zip(axes[0], num_cols_all):
+    sns.histplot(data=df_eda_raw, x=col, hue=df_eda_raw["Отток"].map(CLASS_LABELS), bins=30, stat="density",
+                 common_norm=False, kde=True, palette=PALETTE, ax=ax)
+    ax.set_title(col, fontsize=10)
+plt.tight_layout()
+plt.show()
+
+corr = df_eda_raw[num_cols_all + ["Отток"]].corr()
+plt.figure(figsize=(6, 4))
+sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm", center=0)
+plt.title("Корреляции числовых признаков")
+plt.tight_layout()
+plt.show()
+
+
+--- A: кодовая ячейка 4 ---
+# Проверяем конкретные выводы EDA только по обучающей выборке.
+train_rate = df_eda_raw["Отток"].mean()
+print(f"Доля оттока в train: {train_rate:.1%}")
+print(f"Медианный стаж (train): {df_eda_raw['Стаж'].median():.0f} мес.")
+print(f"Медианный ежемесячный платёж (train): {df_eda_raw['Платёж в месяц'].median():.2f}")
+contract_rates = (df_eda_raw.groupby("Контракт", observed=True)["Отток"]
+                  .agg(["mean", "size"]).sort_values("mean", ascending=False))
+display(contract_rates.rename(columns={"mean":"Доля оттока", "size":"Клиентов"}))
+print("Корреляция стажа с оттоком (train):",
+      round(df_eda_raw[["Стаж", "Отток"]].corr().iloc[0,1], 3))
+print("Вывод: сравнивайте долю оттока по типам контрактов и стажу; корреляция описывает связь, но не причинность.")
+
+
+--- A: кодовая ячейка 5 ---
+base = df_eda_raw["Отток"].mean() * 100
+parts = []
+for col in df_eda_raw.select_dtypes("category").columns:
+    g = df_eda_raw.groupby(col, observed=True)["Отток"].agg(rate="mean", n="size")
+    g = g.drop(index=["Нет интернета", "Нет телефонии"], errors="ignore")
+    g.index = [f"{col}: {v} (n={n})" for v, n in zip(g.index, g["n"])]
+    parts.append(g)
+
+seg = pd.concat(parts).sort_values("rate")
+seg["rate"] *= 100
+
+fig, ax = plt.subplots(figsize=(9, 0.26 * len(seg) + 1.5))
+ax.barh(seg.index, seg["rate"], color=np.where(seg["rate"] > base, PALETTE["Ушёл"], PALETTE["Остался"]))
+ax.bar_label(ax.containers[0], fmt="%.0f%%", fontsize=7, padding=2)
+ax.axvline(base, color="k", ls="--", lw=1, label=f"В среднем по базе: {base:.1f}%")
+ax.set_xlabel("Доля ушедших, %")
+ax.set_title("Отток по сегментам клиентов")
+ax.legend(loc="lower right")
+ax.tick_params(axis="y", labelsize=8)
+ax.grid(axis="y", visible=False)
+plt.tight_layout()
+plt.show()
+
+tenure_groups = pd.cut(df_eda_raw["Стаж"], bins=[-1, 6, 12, 24, 100],
+                       labels=["0-6 мес", "6-12 мес", "1-2 года", "Более 2 лет"])
+churn_by_tenure = df_eda_raw.groupby(tenure_groups, observed=True)["Отток"].mean() * 100
+churn_by_tenure.plot(kind="bar", color="#e4572e", figsize=(8, 4))
+plt.title("Процент оттока по группам стажа")
+plt.ylabel("% ушедших")
+plt.xticks(rotation=0)
+plt.show()
+
+
+--- A: кодовая ячейка 6 ---
+# Сначала фиксируем независимую тестовую выборку. Все гипотезы и графики ниже — только по train.
+def find_col(*keywords):
+    """Ищет столбец по фрагментам названия (для отчётов и демонстрации)."""
+    for column in raw_X.columns:
+        if all(word.lower() in column.lower() for word in keywords):
+            return column
+    raise KeyError(f"Нет столбца для {keywords}")
+
+col_total = find_col("оплачено")
+col_tenure = find_col("стаж")
+service_cols = [c for c in raw_X.select_dtypes("category").columns
+                if c not in ("Контракт", "Способ оплаты", "Интернет", "Пол")]
+has_tech_support = any("поддерж" in c.lower() for c in raw_X.columns)
+tech_col = find_col("поддерж") if has_tech_support else None
+
+def engineer_features(frame):
+    """Детерминированные построчные признаки; не использует y и статистики других строк."""
+    result = frame.copy()
+    result["AvgCharges"] = result[col_total] / result[col_tenure].replace(0, np.nan)
+    result["N_Services"] = (result[service_cols] == "Да").sum(axis=1) if service_cols else 0
+    result["No_Services"] = (result["N_Services"] == 0).astype(int)
+    result["No_TechSupport"] = (result[tech_col] == "Нет").astype(int) if tech_col else 0
+    return result
+
+# Важно: test не участвует в исследовании гипотез и выборе признаков.
+X_train = engineer_features(X_train_raw)
+X_test = engineer_features(X_test_raw)
+df_eda = X_train.copy()
+df_eda["Отток"] = y_train
+print(f"Train: {X_train.shape}; Test: {X_test.shape}")
+
+fig, axes = plt.subplots(1, 3 if has_tech_support else 2, figsize=(14, 4))
+
+sns.boxplot(data=df_eda, x=df_eda["Отток"].map(CLASS_LABELS), y="AvgCharges",
+            hue=df_eda["Отток"].map(CLASS_LABELS), palette=PALETTE, legend=False, ax=axes[0])
+axes[0].set_title("AvgCharges vs Отток")
+axes[0].set_xlabel("")
+
+df_eda.groupby("N_Services", observed=True)["Отток"].mean().plot.bar(color="#e4572e", ax=axes[1])
+axes[1].set_title("Отток по числу услуг")
+axes[1].set_ylabel("доля ушедших")
+axes[1].set_xlabel("")
+
+if has_tech_support:
+    df_eda.groupby("No_TechSupport")["Отток"].mean().plot.bar(color="#e4572e", ax=axes[2])
+    axes[2].set_title("Отток и техподдержка")
+    axes[2].set_xticklabels(["Есть ТП", "Нет ТП"], rotation=0)
+    axes[2].set_xlabel("")
+
+plt.tight_layout()
+plt.show()
+
+print("AvgCharges по классам (медиана / среднее):")
+print(df_eda.groupby("Отток")["AvgCharges"].describe()[["50%", "mean"]].round(1))
+print("\nОтток по числу услуг:")
+print(df_eda.groupby("N_Services", observed=True)["Отток"].mean().round(3))
+print("\nОтток у клиентов без услуг (No_Services):")
+print(df_eda.groupby("No_Services")["Отток"].mean().round(3))
+if has_tech_support:
+    print("\nОтток при отсутствии техподдержки:")
+    print(df_eda.groupby("No_TechSupport")["Отток"].mean().round(3))
+
+
+--- A: кодовая ячейка 7 ---
+# Разделение на train/test сделано ДО исследования дополнительных признаков (раздел 2).
+# Предобработка с обучаемыми параметрами (imputer, scaler, OHE) остаётся внутри Pipeline.
+X = pd.concat([X_train, X_test]).sort_index()  # только для сведений о схеме, не для fit
+cat_cols = X_train.select_dtypes("category").columns.tolist()
+num_cols = X_train.select_dtypes("number").columns.tolist()
+print(f"Категориальные ({len(cat_cols)}): {cat_cols}")
+print(f"Числовые ({len(num_cols)}): {num_cols}")
+print(f"Train: {X_train.shape}, Test: {X_test.shape}")
+
+--- B: кодовая ячейка 1 ---
+import sys
+
+print("Python:", sys.version)
+print("Путь:", sys.executable)
+
+--- B: кодовая ячейка 2 ---
+from pathlib import Path
+
+print("Текущая папка:", Path.cwd())
+
+project_root = Path.cwd()
+
+if project_root.name == "notebooks":
+    project_root = project_root.parent
+
+print("Корень проекта:", project_root)
+
+for folder in ["data", "src", "models", "notebooks"]:
+    path = project_root / folder
+    print(f"{folder}: {'OK' if path.is_dir() else 'НЕ НАЙДЕНА'}")
+
+print("\nФайлы в data:")
+data_dir = project_root / "data"
+
+if data_dir.is_dir():
+    for file in data_dir.rglob("*"):
+        if file.is_file():
+            print(file.relative_to(project_root))
+
+--- B: кодовая ячейка 3 ---
+import sys
+from pathlib import Path
+
+project_root = Path.cwd().parent
+
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+from src.data_utils import load_and_clean
+
+df_test = load_and_clean()
+
+print("Загрузка данных: OK")
+print("Размер датасета:", df_test.shape)
+print("Количество пропусков:", df_test.isna().sum().sum())
+print("\nПервые 5 строк:")
+display(df_test.head())
+
+--- B: кодовая ячейка 4 ---
+import os
+from pathlib import Path
+from threadpoolctl import threadpool_limits
+import sys
+import warnings
+
+import joblib
+import matplotlib.pyplot as plt
+import numpy as np
+import optuna
+import pandas as pd
+import seaborn as sns
+import shap
+from scipy.stats import loguniform, randint
+from sklearn.compose import ColumnTransformer
+from sklearn.dummy import DummyClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.inspection import permutation_importance
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    ConfusionMatrixDisplay,
+    classification_report,
+    precision_recall_curve,
+    roc_auc_score,
+    roc_curve,
+)
+from sklearn.model_selection import (
+    GridSearchCV,
+    RandomizedSearchCV,
+    StratifiedKFold,
+    cross_val_predict,
+    cross_val_score,
+    cross_validate,
+    train_test_split,
+)
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import MinMaxScaler, OneHotEncoder, RobustScaler, StandardScaler
+
+# Ищем корень проекта независимо от текущей рабочей папки.
+PROJECT_ROOT = next((q for base in [Path.cwd(), *Path.cwd().parents]
+                     for q in [base, base.parent]
+                     if (q / "src" / "data_utils.py").exists()), None)
+if PROJECT_ROOT is None:
+    raise FileNotFoundError("Не найден src/data_utils.py. Запускайте ноутбук из папки проекта или notebooks/.")
+sys.path.insert(0, str(PROJECT_ROOT))
+from src.data_utils import load_and_clean
+
+warnings.filterwarnings("ignore", category=FutureWarning)
+optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+RANDOM_STATE = 42
+# Для первого запуска True: быстрый тест; для итоговых результатов False.
+FAST_MODE = False
+CV_FOLDS = 3 if FAST_MODE else 5
+SEARCH_ITER = 8 if FAST_MODE else 40
+OPTUNA_TRIALS = 8 if FAST_MODE else 50
+N_JOBS = 2  # избегаем перегрузки памяти при вложенной параллелизации
+MIN_RECALL = 0.75
+CV = StratifiedKFold(n_splits=CV_FOLDS, shuffle=True, random_state=RANDOM_STATE)
+sns.set_theme(style="whitegrid")
+PALETTE = {"Остался": "#4c9f70", "Ушёл": "#e4572e"}
+CLASS_LABELS = {0: "Остался", 1: "Ушёл"}
+
+
+--- B: кодовая ячейка 5 ---
+df = load_and_clean()
+print(f"Размер данных: {df.shape}")
+print(f"Доля ушедших: {df['Отток'].mean():.1%}")
+print(f"Пропусков всего: {df.isna().sum().sum()}")
+print(f"Дубликатов по признакам (без customerID): "
+      f"{df.drop(columns=['customerID'], errors='ignore').duplicated().sum()}")
+display(df.head(3))
+
+--- B: кодовая ячейка 6 ---
+num_cols_all = [c for c in df.select_dtypes("number").columns if c != "Отток"]
+
+display(df[num_cols_all].describe().loc[["min", "25%", "50%", "75%", "max"]].T)
+
+fig, axes = plt.subplots(1, len(num_cols_all), figsize=(4 * len(num_cols_all), 3.5), squeeze=False)
+for ax, col in zip(axes[0], num_cols_all):
+    sns.histplot(data=df, x=col, hue=df["Отток"].map(CLASS_LABELS), bins=30, stat="density",
+                 common_norm=False, kde=True, palette=PALETTE, ax=ax)
+    ax.set_title(col, fontsize=10)
+plt.tight_layout()
+plt.show()
+
+corr = df[num_cols_all + ["Отток"]].corr()
+plt.figure(figsize=(6, 4))
+sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm", center=0)
+plt.title("Корреляции числовых признаков")
+plt.tight_layout()
+plt.show()
+
+
+--- B: кодовая ячейка 7 ---
+base = df["Отток"].mean() * 100
+parts = []
+for col in df.select_dtypes("category").columns:
+    g = df.groupby(col, observed=True)["Отток"].agg(rate="mean", n="size")
+    g = g.drop(index=["Нет интернета", "Нет телефонии"], errors="ignore")
+    g.index = [f"{col}: {v} (n={n})" for v, n in zip(g.index, g["n"])]
+    parts.append(g)
+
+seg = pd.concat(parts).sort_values("rate")
+seg["rate"] *= 100
+
+fig, ax = plt.subplots(figsize=(9, 0.26 * len(seg) + 1.5))
+ax.barh(seg.index, seg["rate"], color=np.where(seg["rate"] > base, PALETTE["Ушёл"], PALETTE["Остался"]))
+ax.bar_label(ax.containers[0], fmt="%.0f%%", fontsize=7, padding=2)
+ax.axvline(base, color="k", ls="--", lw=1, label=f"В среднем по базе: {base:.1f}%")
+ax.set_xlabel("Доля ушедших, %")
+ax.set_title("Отток по сегментам клиентов")
+ax.legend(loc="lower right")
+ax.tick_params(axis="y", labelsize=8)
+ax.grid(axis="y", visible=False)
+plt.tight_layout()
+plt.show()
+
+tenure_groups = pd.cut(df["Стаж"], bins=[-1, 6, 12, 24, 100],
+                       labels=["0-6 мес", "6-12 мес", "1-2 года", "Более 2 лет"])
+churn_by_tenure = df.groupby(tenure_groups, observed=True)["Отток"].mean() * 100
+churn_by_tenure.plot(kind="bar", color="#e4572e", figsize=(8, 4))
+plt.title("Процент оттока по группам стажа")
+plt.ylabel("% ушедших")
+plt.xticks(rotation=0)
+plt.show()
+
+
+--- B: кодовая ячейка 8 ---
+def find_col(*keywords):
+    """Ищет колонку, в названии которой есть все подстроки (без учёта регистра)."""
+    for c in df.columns:
+        cl = c.lower()
+        if all(k.lower() in cl for k in keywords):
+            return c
+    raise KeyError(f"Колонка не найдена по ключам {keywords}. Доступные: {df.columns.tolist()}")
+
+col_total = find_col("оплачено")     # «Всего оплачено»
+col_tenure = find_col("стаж")        # «Стаж»
+
+# Гипотеза 1: средний чек в месяц. «Переплачивающие» клиенты уходят чаще.
+df["AvgCharges"] = df[col_total] / df[col_tenure].replace(0, np.nan)
+# Деление на ноль (стаж 0) даёт NaN — его заполнит SimpleImputer в пайплайне.
+
+# Гипотеза 2: чем больше услуг, тем выше «стоимость ухода».
+service_cols = [c for c in df.select_dtypes("category").columns
+                if c not in ("Контракт", "Способ оплаты", "Интернет", "Пол")]
+df["N_Services"] = (df[service_cols] == "Да").sum(axis=1) if service_cols else 0
+
+# Уточнение гипотезы 2: зависимость немонотонна — главный риск «0 услуг»
+df["No_Services"] = (df["N_Services"] == 0).astype(int)
+
+# Гипотеза 3: без техподдержки недовольство накапливается быстрее.
+has_tech_support = any("поддерж" in c.lower() for c in df.columns)
+df["No_TechSupport"] = (df[find_col("поддерж")] == "Нет").astype(int) if has_tech_support else 0
+
+fig, axes = plt.subplots(1, 3 if has_tech_support else 2, figsize=(14, 4))
+
+sns.boxplot(data=df, x=df["Отток"].map(CLASS_LABELS), y="AvgCharges",
+            hue=df["Отток"].map(CLASS_LABELS), palette=PALETTE, legend=False, ax=axes[0])
+axes[0].set_title("AvgCharges vs Отток")
+axes[0].set_xlabel("")
+
+df.groupby("N_Services", observed=True)["Отток"].mean().plot.bar(color="#e4572e", ax=axes[1])
+axes[1].set_title("Отток по числу услуг")
+axes[1].set_ylabel("доля ушедших")
+axes[1].set_xlabel("")
+
+if has_tech_support:
+    df.groupby("No_TechSupport")["Отток"].mean().plot.bar(color="#e4572e", ax=axes[2])
+    axes[2].set_title("Отток и техподдержка")
+    axes[2].set_xticklabels(["Есть ТП", "Нет ТП"], rotation=0)
+    axes[2].set_xlabel("")
+
+plt.tight_layout()
+plt.show()
+
+print("AvgCharges по классам (медиана / среднее):")
+print(df.groupby("Отток")["AvgCharges"].describe()[["50%", "mean"]].round(1))
+print("\nОтток по числу услуг:")
+print(df.groupby("N_Services", observed=True)["Отток"].mean().round(3))
+print("\nОтток у клиентов без услуг (No_Services):")
+print(df.groupby("No_Services")["Отток"].mean().round(3))
+if has_tech_support:
+    print("\nОтток при отсутствии техподдержки:")
+    print(df.groupby("No_TechSupport")["Отток"].mean().round(3))
+
+
+--- B: кодовая ячейка 9 ---
+X = df.drop(columns=["Отток"])
+y = df["Отток"]
+
+
+cat_cols = X.select_dtypes("category").columns.tolist()
+num_cols = X.select_dtypes("number").columns.tolist()
+print(f"Категориальные ({len(cat_cols)}): {cat_cols}")
+print(f"Числовые ({len(num_cols)}): {num_cols}")
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, stratify=y, random_state=RANDOM_STATE
+)
+print(f"\nTrain: {X_train.shape}, Test: {X_test.shape}")
+
+======================================================================
+REPLACE: A[9:9], B[11:11]
+
+--- A: кодовая ячейка 9 ---
+logreg = LogisticRegression(max_iter=5000, class_weight="balanced", random_state=RANDOM_STATE)
+
+scaling_rows = []
+for name, scaler in [("Без масштабирования", None), ("StandardScaler", StandardScaler()),
+                     ("MinMaxScaler", MinMaxScaler()), ("RobustScaler", RobustScaler())]:
+    pipe = make_model(logreg, scaler=scaler)
+    # Несмасштабированная версия может не сходиться даже за 5000 итераций.
+    # Явно фиксируем предупреждения вместо скрытия проблемы.
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", category=ConvergenceWarning)
+        scores = cross_validate(pipe, X_train, y_train, cv=CV, scoring="roc_auc", n_jobs=1)
+        pipe.fit(X_train, y_train)
+    convergence_issues = sum(issubclass(w.category, ConvergenceWarning) for w in caught)
+    if convergence_issues:
+        print(f"{name}: {convergence_issues} предупреждений сходимости; не используйте эту версию для финальной модели")
+    coefs = pipe.named_steps["model"].coef_[0]
+    scaling_rows.append({"Способ": name,
+                         "ROC-AUC (CV)": f"{scores['test_score'].mean():.4f} ± {scores['test_score'].std():.4f}",
+                         "Число коэффициентов": len(coefs),
+                         "||w||": round(np.linalg.norm(coefs), 1),
+                         "max |w|": round(np.abs(coefs).max(), 1),
+                         "Предупреждений сходимости": convergence_issues})
+pd.DataFrame(scaling_rows).set_index("Способ")
+
+
+--- B: кодовая ячейка 11 ---
+logreg = LogisticRegression(max_iter=1000, class_weight="balanced", random_state=RANDOM_STATE)
+
+scaling_rows = []
+for name, scaler in [("Без масштабирования", None), ("StandardScaler", StandardScaler()),
+                     ("MinMaxScaler", MinMaxScaler()), ("RobustScaler", RobustScaler())]:
+    pipe = make_model(logreg, scaler=scaler)
+    scores = cross_validate(pipe, X_train, y_train, cv=CV, scoring="roc_auc", n_jobs=N_JOBS)
+    pipe.fit(X_train, y_train)
+    coefs = pipe.named_steps["model"].coef_[0]
+    scaling_rows.append({"Способ": name,
+                         "ROC-AUC (CV)": f"{scores['test_score'].mean():.4f} ± {scores['test_score'].std():.4f}",
+                         "Число коэффициентов": len(coefs),
+                         "||w||": round(np.linalg.norm(coefs), 1),
+                         "max |w|": round(np.abs(coefs).max(), 1)})
+pd.DataFrame(scaling_rows).set_index("Способ")
+
+======================================================================
+DELETE: A[17:17], B[19:18]
+
+--- A: кодовая ячейка 17 ---
+from sklearn.base import clone
+
+engineered_columns = ["AvgCharges", "N_Services", "No_Services", "No_TechSupport"]
+base_columns = [c for c in X_train.columns if c not in engineered_columns]
+
+# Клон уже выбранной модели: те же гиперпараметры, но новая схема предобработки.
+model_with = clone(final_model)
+model_without = clone(final_model)
+model_without.set_params(prep=ColumnTransformer([
+    ("cat", clone(final_model.named_steps["prep"].named_transformers_["cat"]),
+     [c for c in cat_cols if c in base_columns]),
+    ("num", clone(final_model.named_steps["prep"].named_transformers_["num"]),
+     [c for c in num_cols if c in base_columns]),
+]))
+with_scores = cross_val_score(model_with, X_train, y_train, cv=CV, scoring="roc_auc", n_jobs=N_JOBS)
+without_scores = cross_val_score(model_without, X_train[base_columns], y_train,
+                                 cv=CV, scoring="roc_auc", n_jobs=N_JOBS)
+ablation_report = pd.DataFrame({
+    "Вариант": ["С дополнительными", "Без дополнительных"],
+    "ROC-AUC CV (среднее)": [with_scores.mean(), without_scores.mean()],
+    "ROC-AUC CV (std)": [with_scores.std(), without_scores.std()],
+})
+display(ablation_report.round(4))
+print(f"Разница CV ROC-AUC (с - без): {with_scores.mean() - without_scores.mean():+.4f}")
+print("Важно: оценка на тех же CV-фолдах, где выбиралась модель; test не использован.")
+======================================================================
+REPLACE: A[20:22], B[21:25]
+
+--- A: кодовая ячейка 20 ---
+risk_df = X_test.copy()
+risk_df["Скор_оттока"] = y_proba
+risk_df["В_зоне_риска"] = y_proba >= best_threshold
+print(f"В зоне риска: {risk_df['В_зоне_риска'].sum()} из {len(risk_df)}")
+risk_cols = [c for c in [col_tenure, find_col("контракт"), find_col("интернет"),
+                         find_col("оплат"), "Скор_оттока"] if c in risk_df.columns]
+display(risk_df.sort_values("Скор_оттока", ascending=False).head(20)[risk_cols].round(3))
+
+# Сохраняем только клиентов, для которых модель предсказывает риск ухода.
+# Файл содержит клиентские сведения: не публикуйте его в открытом репозитории.
+reports_dir = PROJECT_ROOT / "reports"
+reports_dir.mkdir(parents=True, exist_ok=True)
+risk_csv = reports_dir / "churn_risk_clients.csv"
+risk_df.loc[risk_df["В_зоне_риска"]].sort_values(
+    "Скор_оттока", ascending=False
+).to_csv(risk_csv, index=True, encoding="utf-8-sig")
+print(f"CSV клиентов высокого риска: {risk_csv}")
+
+import sklearn
+model_dir = PROJECT_ROOT / "models"
+model_dir.mkdir(parents=True, exist_ok=True)
+artifact_path = model_dir / "churn_artifact.pkl"
+artifact = {
+    "model": final_model,
+    "threshold": float(best_threshold),
+    "features": X_train.columns.tolist(),
+    "sklearn_version": sklearn.__version__,
+    "random_state": RANDOM_STATE,
+    "fast_mode": FAST_MODE,
+}
+joblib.dump(artifact, artifact_path, compress=3)
+print(f"Модель и порог сохранены: {artifact_path}")
+# Проверка сохранения и идентичности предсказаний
+loaded = joblib.load(artifact_path)  # загружать только доверенные joblib-файлы
+assert np.allclose(loaded["model"].predict_proba(X_test)[:, 1], y_proba)
+assert loaded["threshold"] == float(best_threshold)
+print("Проверка повторной загрузки: OK")
+
+--- A: кодовая ячейка 21 ---
+from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
+
+auc_test = roc_auc_score(y_test, y_proba)
+precision_test = precision_score(y_test, y_pred, zero_division=0)
+recall_test = recall_score(y_test, y_pred, zero_division=0)
+f1_test = f1_score(y_test, y_pred, zero_division=0)
+tn, fp, fn, tp = confusion_matrix(y_test, y_pred, labels=[0, 1]).ravel()
+
+print(f"""ИТОГИ ПОЛНОГО ЭКСПЕРИМЕНТА
+Режим: {'быстрый' if FAST_MODE else 'полный'}
+Финальная модель: {best_model_name}
+CV ROC-AUC после подбора параметров (возможен оптимизм): {candidate_scores[best_model_name]:.4f}
+
+НАСТРОЙКА ПОРОГА (OOF НА TRAIN, НЕ TEST):
+Порог: {best_threshold:.4f}
+OOF Recall: {best_recall:.2%}
+OOF Precision: {best_precision:.2%}
+
+НЕЗАВИСИМАЯ ОЦЕНКА НА TEST:
+ROC-AUC: {auc_test:.4f}
+Precision: {precision_test:.2%}
+Recall: {recall_test:.2%}
+F1-score: {f1_test:.4f}
+Матрица ошибок: TN={tn}, FP={fp}, FN={fn}, TP={tp}
+В зоне риска: {int(risk_df['В_зоне_риска'].sum())} из {len(risk_df)}
+
+ТОП-5 признаков (permutation importance, ассоциации, не причинные эффекты):
+{importance.tail(5)[::-1].to_string()}
+
+БИЗНЕС-ГИПОТЕЗЫ ДЛЯ ПРОВЕРКИ:
+Онбординг новых клиентов; предложения по более длительным контрактам;
+приоритизация контактов с клиентами высокого риска.
+Экономический эффект и эффективность скидок следует проверить в A/B-тесте.""")
+print("\nABLATION (train CV, не test):")
+print(ablation_report.round(4).to_string(index=False))
+print("CSV высокого риска:", risk_csv)
+
+
+--- A: кодовая ячейка 22 ---
+# Итоговые автоматические проверки после полного запуска
+assert X_train.index.intersection(X_test.index).empty
+assert set(np.unique(y_pred)).issubset({0, 1})
+assert np.isfinite(y_proba).all()
+assert 0 <= best_threshold <= 1
+assert artifact_path.exists()
+assert len(y_proba) == len(y_test)
+print("ВСЕ БАЗОВЫЕ ПРОВЕРКИ ПРОЙДЕНЫ")
+print("Режим:", "быстрый" if FAST_MODE else "полный")
+print("ROC-AUC test:", round(roc_auc_score(y_test, y_proba), 4))
+assert abs(precision_test - precision_score(y_test, y_pred, zero_division=0)) < 1e-12
+assert abs(recall_test - recall_score(y_test, y_pred, zero_division=0)) < 1e-12
+assert loaded["features"] == X_train.columns.tolist()
+assert loaded["fast_mode"] == FAST_MODE
+print("Артефакт, порог и схема признаков: OK")
+
+--- B: кодовая ячейка 21 ---
+risk_df = X_test.copy()
+risk_df["Скор_оттока"] = y_proba
+risk_df["В_зоне_риска"] = y_proba >= best_threshold
+print(f"В зоне риска: {risk_df['В_зоне_риска'].sum()} из {len(risk_df)}")
+risk_cols = [c for c in [col_tenure, find_col("контракт"), find_col("интернет"),
+                         find_col("оплат"), "Скор_оттока"] if c in risk_df.columns]
+display(risk_df.sort_values("Скор_оттока", ascending=False).head(20)[risk_cols].round(3))
+
+import sklearn
+model_dir = PROJECT_ROOT / "models"
+model_dir.mkdir(parents=True, exist_ok=True)
+artifact_path = model_dir / "churn_artifact.pkl"
+artifact = {
+    "model": final_model,
+    "threshold": float(best_threshold),
+    "features": X_train.columns.tolist(),
+    "sklearn_version": sklearn.__version__,
+    "random_state": RANDOM_STATE,
+    "fast_mode": FAST_MODE,
+}
+joblib.dump(artifact, artifact_path, compress=3)
+print(f"Модель и порог сохранены: {artifact_path}")
+# Проверка сохранения и идентичности предсказаний
+loaded = joblib.load(artifact_path)  # загружать только доверенные joblib-файлы
+assert np.allclose(loaded["model"].predict_proba(X_test)[:, 1], y_proba)
+assert loaded["threshold"] == float(best_threshold)
+print("Проверка повторной загрузки: OK")
+
+--- B: кодовая ячейка 22 ---
+print(f"""ИТОГИ
+Финальная модель: {best_model_name}
+CV ROC-AUC: {candidate_scores[best_model_name]:.4f}
+ROC-AUC на test: {roc_auc_score(y_test, y_proba):.4f}
+Порог: {best_threshold:.3f} → Recall {best_recall:.1%} при Precision {best_precision:.1%}
+В зоне риска: {int(risk_df['В_зоне_риска'].sum())} из {len(risk_df)}
+
+ТОП-5 факторов риска (permutation importance):
+{importance.tail(5)[::-1].to_string()}
+
+РЕКОМЕНДАЦИИ: онбординг новичков в первые 3 месяца; скидка 10–15% за годовой контракт;
+ежемесячная обзвонка top-100 из списка риска.""")
+
+
+--- B: кодовая ячейка 23 ---
+# Итоговые автоматические проверки после полного запуска
+assert X_train.index.intersection(X_test.index).empty
+assert set(np.unique(y_pred)).issubset({0, 1})
+assert np.isfinite(y_proba).all()
+assert 0 <= best_threshold <= 1
+assert artifact_path.exists()
+assert len(y_proba) == len(y_test)
+print("ВСЕ БАЗОВЫЕ ПРОВЕРКИ ПРОЙДЕНЫ")
+print("Режим:", "быстрый" if FAST_MODE else "полный")
+print("ROC-AUC test:", round(roc_auc_score(y_test, y_proba), 4))
+
+--- B: кодовая ячейка 24 ---
+from sklearn.metrics import (
+    roc_auc_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    confusion_matrix,
+)
+
+# Вероятности ухода клиентов
+y_proba = final_model.predict_proba(X_test)[:, 1]
+
+# Прогноз с подобранным порогом
+y_pred = (y_proba >= best_threshold).astype(int)
+
+print("ИТОГОВЫЕ МЕТРИКИ")
+print("-" * 40)
+print(f"ROC-AUC:   {roc_auc_score(y_test, y_proba):.4f}")
+print(f"Precision: {precision_score(y_test, y_pred, zero_division=0):.4f}")
+print(f"Recall:    {recall_score(y_test, y_pred, zero_division=0):.4f}")
+print(f"F1-score:  {f1_score(y_test, y_pred, zero_division=0):.4f}")
+print(f"Порог:     {best_threshold:.4f}")
+
+print("\nМатрица ошибок:")
+print(confusion_matrix(y_test, y_pred))
+
+--- B: кодовая ячейка 25 ---
+from pathlib import Path
+import joblib
+
+model_path = Path.cwd().parent / "models" / "churn_artifact.pkl"
+
+print("Файл существует:", model_path.exists())
+
+if model_path.exists():
+    artifact = joblib.load(model_path)
+
+    print("Состав:", list(artifact.keys()))
+    print("Порог:", artifact["threshold"])
+    print("Тип модели:", type(artifact["model"]).__name__)
+    print("Проверка загрузки: OK")
