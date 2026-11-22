@@ -8,7 +8,6 @@
 
 - **Репозиторий:** https://github.com/zenith305/Case_02_Telco_Churn
 - **Предзащита — открыть в Google Colab:** https://colab.research.google.com/github/zenith305/Case_02_Telco_Churn/blob/main/notebooks/01_predefense.ipynb
-- **Защита — открыть в Google Colab:** https://colab.research.google.com/github/zenith305/Case_02_Telco_Churn/blob/main/notebooks/02_defense.ipynb
 - **Исходный CSV на GitHub:** https://github.com/zenith305/Case_02_Telco_Churn/blob/main/data/raw/WA_Fn-UseC_-Telco-Customer-Churn.csv
 - **Прямая ссылка на CSV (Raw):** https://raw.githubusercontent.com/zenith305/Case_02_Telco_Churn/main/data/raw/WA_Fn-UseC_-Telco-Customer-Churn.csv
 
