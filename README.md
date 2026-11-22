@@ -22,9 +22,8 @@ Case_02_Telco_Churn/
 │   └── raw/
 │       └── WA_Fn-UseC_-Telco-Customer-Churn.csv
 ├── notebooks/
-│   ├── 01_predefense.ipynb    # Предзащита: анализ данных и базовые модели
-│   └── 02_defense.ipynb       # Защита: модели, оценка и интерпретация
-├── reports/                   # Отчёты и результаты анализа
+│   └── 01_predefense.ipynb    # Предзащита: анализ данных и базовые модели
+│   ├── reports/                   # Отчёты и результаты анализа
 ├── src/
 │   └── data_utils.py         # Загрузка и подготовка данных
 ├── .gitignore
